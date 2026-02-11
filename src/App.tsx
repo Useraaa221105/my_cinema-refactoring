@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import {
   BrowserRouter as Router,
   Routes,
@@ -7,7 +7,6 @@ import {
   useParams,
   useNavigate,
 } from "react-router-dom";
-
 import Header from "./Header";
 import HomePage from "./HomePage";
 import LoginPage from "./LoginPage";
@@ -15,171 +14,160 @@ import RegisterPage from "./RegisterPage";
 import UserProfilePage from "./UserProfilePage";
 import MovieDetailsPage from "./MovieDetailsPage";
 import AdminDashboard from "./AdminDashboard/AdminDashboard";
-
 import { getCurrentUser, logout } from "./api/auth";
 import * as movie from "./api/movie";
 import { jwtDecode } from "jwt-decode";
-import { ROUTES, UserRole, type UserRoleType } from "./constants";
 
-// Типизация данных, хранящихся в JWT токене
+type UserRole = "ADMIN" | "USER";
+
 interface TokenPayload {
   sub: string;
-  role: UserRoleType;
+  role: UserRole;
   exp: number;
   iat: number;
 }
 
+interface AuthData {
+  accessToken: string;
+}
+
+// Главный компонент приложения
 export default function App() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<UserRoleType | null>(null);
+  const [userRole, setUserRole] = useState<UserRole | null>(null);
+  const [userInfo, setUserInfo] = useState<TokenPayload | null>(null);
 
-  /**
-   * Метод для установки данных авторизации.
-   * Декодирует токен и сохраняет роль пользователя в состояние.
-   */
-  const authenticate = useCallback((token: string) => {
-    try {
-      const decoded = jwtDecode<TokenPayload>(token);
-      setAccessToken(token);
-      setUserRole(decoded.role);
-    } catch (error) {
-      console.error("Ошибка при декодировании токена:", error);
-      handleLogout();
-    }
-  }, []);
-
-  // Восстановление сессии пользователя при загрузке страницы
+  // При монтировании пытаемся восстановить текущего пользователя
   useEffect(() => {
     const currentUser = getCurrentUser();
+
     if (currentUser?.accessToken) {
-      authenticate(currentUser.accessToken);
+      setAccessToken(currentUser.accessToken);
+
+      try {
+        const decoded = jwtDecode<TokenPayload>(currentUser.accessToken);
+        setUserRole(decoded.role);
+        setUserInfo(decoded);
+      } catch (error) {
+        setUserRole(null);
+        setUserInfo(null);
+        console.error("Token decoding failed:", error);
+      }
     }
-  }, [authenticate]);
+  }, []);
 
   const handleLogout = () => {
     logout();
     setAccessToken(null);
     setUserRole(null);
+    setUserInfo(null);
+  };
+
+  const handleAuthSuccess = (authData: AuthData) => {
+    setAccessToken(authData.accessToken);
+
+    try {
+      const decoded = jwtDecode<TokenPayload>(authData.accessToken);
+      setUserRole(decoded.role);
+      setUserInfo(decoded);
+    } catch {
+      setUserRole(null);
+      setUserInfo(null);
+    }
   };
 
   return (
     <Router>
       <div className="app-container min-vh-100 d-flex flex-column bg-dark text-light">
         <Header token={accessToken} onLogout={handleLogout} />
-
-        <main className="flex-grow-1">
+        <div className="flex-grow-1">
           <Routes>
-            <Route path={ROUTES.ROOT} element={<Navigate to={ROUTES.HOME} />} />
+            <Route path="/" element={<Navigate to="/home" />} />
 
-            {/* Авторизация и Регистрация: редирект, если пользователь уже вошел */}
             <Route
-              path={ROUTES.LOGIN}
+              path="/login"
               element={
                 accessToken ? (
-                  <Navigate
-                    to={
-                      userRole === UserRole.ADMIN
-                        ? ROUTES.ADMIN
-                        : ROUTES.PROFILE
-                    }
-                  />
+                  userRole === "ADMIN" ? (
+                    <Navigate to="/admin" />
+                  ) : (
+                    <Navigate to="/profile" />
+                  )
                 ) : (
-                  <LoginPage
-                    onLogin={(data: { accessToken: string }) =>
-                      authenticate(data.accessToken)
-                    }
-                  />
+                  <LoginPage onLogin={handleAuthSuccess} />
                 )
               }
             />
 
             <Route
-              path={ROUTES.REGISTER}
+              path="/register"
               element={
                 accessToken ? (
-                  <Navigate
-                    to={
-                      userRole === UserRole.ADMIN
-                        ? ROUTES.ADMIN
-                        : ROUTES.PROFILE
-                    }
-                  />
+                  userRole === "ADMIN" ? (
+                    <Navigate to="/admin" />
+                  ) : (
+                    <Navigate to="/profile" />
+                  )
                 ) : (
-                  <RegisterPage
-                    onRegister={(data: { accessToken: string }) =>
-                      authenticate(data.accessToken)
-                    }
-                  />
+                  <RegisterPage onRegister={handleAuthSuccess} />
                 )
               }
             />
 
-            {/* Личный кабинет пользователя (доступ только для USER) */}
             <Route
-              path={ROUTES.PROFILE}
+              path="/profile"
               element={
-                accessToken && userRole === UserRole.USER ? (
+                accessToken && userRole === "USER" ? (
                   <UserProfilePage token={accessToken} />
                 ) : (
-                  <Navigate to={ROUTES.LOGIN} />
+                  <Navigate to="/login" />
                 )
               }
             />
 
-            {/* Панель администратора (доступ только для ADMIN) */}
             <Route
-              path={ROUTES.ADMIN}
+              path="/admin"
               element={
-                accessToken && userRole === UserRole.ADMIN ? (
+                accessToken && userRole === "ADMIN" ? (
                   <AdminDashboard onBack={handleLogout} />
                 ) : (
-                  <Navigate to={ROUTES.LOGIN} />
+                  <Navigate to="/login" />
                 )
               }
             />
 
-            <Route path={ROUTES.HOME} element={<HomePage />} />
-            <Route
-              path={ROUTES.FILM_DETAILS}
-              element={<MovieDetailsWrapper />}
-            />
-
-            <Route path={ROUTES.ANY} element={<Navigate to={ROUTES.ROOT} />} />
+            <Route path="/home" element={<HomePage />} />
+            <Route path="/films/:id" element={<MovieDetailsWrapper />} />
+            <Route path="*" element={<Navigate to="/" />} />
           </Routes>
-        </main>
+        </div>
       </div>
     </Router>
   );
 }
 
-/**
- * Обертка для страницы деталей фильма.
- * Отвечает за загрузку данных о конкретном фильме по ID из URL.
- */
 function MovieDetailsWrapper() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [film, setFilm] = useState<movie.Film | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
+  // Загружаем данные о фильме при изменении id
   useEffect(() => {
     if (!id) return;
-
-    movie
-      .getFilmById(id)
-      .then(setFilm)
-      .catch((err) => {
-        console.error(err);
-        setError("Не удалось загрузить данные фильма");
-      });
+    movie.getFilmById(id).then(setFilm);
   }, [id]);
 
-  if (error) return <div className="text-center mt-5 text-danger">{error}</div>;
-  if (!film) return <div className="text-center mt-5">Загрузка...</div>;
+  if (!film) {
+    return <div className="text-center mt-5">Загрузка фильма...</div>;
+  }
 
   const handleSelectSession = (sessionId: number) => {
     navigate(`/sessions/${sessionId}`, {
-      state: { from: "movie_details", timestamp: new Date().toISOString() },
+      state: {
+        from: "movie-details",
+        timestamp: new Date().toISOString(),
+        futureFeature: "reserved_for_future_use",
+      },
     });
   };
 
